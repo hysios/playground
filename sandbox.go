@@ -22,13 +22,16 @@ import (
 	"io/ioutil"
 	stdlog "log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
+	"text/scanner"
 	"text/template"
 	"time"
 
@@ -36,7 +39,7 @@ import (
 )
 
 const (
-	maxRunTime = 2 * time.Second
+	maxRunTime = 120 * time.Minute
 
 	// progName is the program name in compiler errors
 	progName = "prog.go"
@@ -46,7 +49,8 @@ const (
 var nonCachingRuntimeErrors = []string{"out of memory", "cannot allocate memory"}
 
 type request struct {
-	Body string
+	Body   string
+	Header http.Header
 }
 
 type response struct {
@@ -72,6 +76,7 @@ func (s *server) commandHandler(cachePrefix string, cmdFunc func(*request) (*res
 		}
 
 		var req request
+		req.Header = r.Header
 		// Until programs that depend on golang.org/x/tools/godoc/static/playground.js
 		// are updated to always send JSON, this check is in place.
 		if b := r.FormValue("body"); b != "" {
@@ -292,7 +297,8 @@ func compileAndRun(req *request) (*response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating temp directory: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	// defer os.RemoveAll(tmpDir)
+	stdlog.Printf("sandbox: %s\n", tmpDir)
 
 	src := []byte(req.Body)
 	in := filepath.Join(tmpDir, "main.go")
@@ -315,9 +321,27 @@ func compileAndRun(req *request) (*response, error) {
 		}
 	}
 
+	if _, err := gomodScan(req.Header); err != nil {
+		return &response{Errors: err.Error()}, nil
+	}
+
+	modsrc := req.Header.Get("X-GOMOD")
+	gomod, err := url.QueryUnescape(modsrc)
+	if err != nil {
+		return &response{Errors: err.Error()}, nil
+	}
+
+	if err := createModfile(gomod, tmpDir); err != nil {
+		return nil, fmt.Errorf("gomod file can't be created: %v", err)
+	}
+
 	exe := filepath.Join(tmpDir, "a.out")
 	cmd := exec.Command("go", "build", "-o", exe, in)
-	cmd.Env = []string{"GOOS=nacl", "GOARCH=amd64p32", "GOPATH=" + os.Getenv("GOPATH")}
+
+	// cmd.Env = []string{"GOOS=nacl", "GOARCH=amd64p32", "GOPATH=" + os.Getenv("GOPATH")}
+	cmd.Env = []string{"GOPATH=" + os.Getenv("GOPATH")}
+	cmd.Env = append(cmd.Env, "GOCACHE=/tmp/cache")
+	cmd.Dir = tmpDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			// Return compile errors to the user.
@@ -336,7 +360,8 @@ func compileAndRun(req *request) (*response, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), maxRunTime)
 	defer cancel()
-	cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
+	// cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
+	cmd = exec.CommandContext(ctx, exe, testParam)
 	rec := new(Recorder)
 	cmd.Stdout = rec.Stdout()
 	cmd.Stderr = rec.Stderr()
@@ -370,6 +395,72 @@ func compileAndRun(req *request) (*response, error) {
 		}
 	}
 	return &response{Events: events, Status: status, IsTest: testParam != "", TestsFailed: fails}, nil
+}
+
+func gomodScan(header http.Header) (bool, error) {
+	var (
+		s scanner.Scanner
+	)
+	gomod, err := url.QueryUnescape(header.Get("X-GOMOD"))
+	if err != nil {
+		return false, err
+	}
+
+	s.Init(strings.NewReader(gomod))
+	if err := scanmodHeader(s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func scanmodHeader(s scanner.Scanner) error {
+	var step int
+
+	for tok := s.Scan(); tok != scanner.EOF; tok = s.Scan() {
+		v := s.TokenText()
+
+		if v == "module" {
+			step++
+		} else if isLetter(v) && step > 0 {
+			return nil
+		} else {
+			return fmt.Errorf("invalid go modules format: %s\n", v)
+		}
+	}
+	return fmt.Errorf("invalid go modules format\n")
+}
+
+func isLetter(s string) bool {
+	for _, ch := range s {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' {
+			continue
+		} else {
+			return false
+		}
+	}
+
+	return true
+}
+
+func createModfile(src string, sandbox string) error {
+	var (
+		gomod = []byte(`module playground
+`)
+		filename = path.Join(sandbox, "go.mod")
+	)
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if len(src) > 0 {
+		gomod = []byte(src)
+	}
+
+	stdlog.Printf("create modfile: %s\n -> %s", filename, gomod)
+
+	_, err = file.Write(gomod)
+	return err
 }
 
 func (s *server) healthCheck() error {
