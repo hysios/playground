@@ -297,8 +297,7 @@ func compileAndRun(req *request) (*response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating temp directory: %v", err)
 	}
-	// defer os.RemoveAll(tmpDir)
-	stdlog.Printf("sandbox: %s\n", tmpDir)
+	defer os.RemoveAll(tmpDir)
 
 	src := []byte(req.Body)
 	in := filepath.Join(tmpDir, "main.go")
@@ -456,8 +455,6 @@ func createModfile(src string, sandbox string) error {
 	if len(src) > 0 {
 		gomod = []byte(src)
 	}
-
-	stdlog.Printf("create modfile: %s\n -> %s", filename, gomod)
 
 	_, err = file.Write(gomod)
 	return err
