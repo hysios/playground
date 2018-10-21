@@ -285,7 +285,11 @@ func main() {
 }
 `))
 
-var failedTestPattern = "--- FAIL"
+var (
+	failedTestPattern = "--- FAIL"
+	defaultMod        = `module playground
+`
+)
 
 // compileAndRun tries to build and run a user program.
 // The output of successfully ran program is returned in *response.Events.
@@ -320,11 +324,13 @@ func compileAndRun(req *request) (*response, error) {
 		}
 	}
 
-	if _, err := gomodScan(req.Header); err != nil {
+	modsrc := req.Header.Get("X-GOMOD")
+	if len(modsrc) == 0 {
+		modsrc = defaultMod
+	} else if _, err := gomodScan(req.Header); err != nil {
 		return &response{Errors: err.Error()}, nil
 	}
 
-	modsrc := req.Header.Get("X-GOMOD")
 	gomod, err := url.QueryUnescape(modsrc)
 	if err != nil {
 		return &response{Errors: err.Error()}, nil
@@ -334,12 +340,24 @@ func compileAndRun(req *request) (*response, error) {
 		return nil, fmt.Errorf("gomod file can't be created: %v", err)
 	}
 
+	// {
+	// 	cmd := exec.Command("go", "env")
+	// 	cmd.Dir = tmpDir
+	// 	out, _ := cmd.CombinedOutput()
+
+	// 	log.Printf("%s", out)
+	// }
+
 	exe := filepath.Join(tmpDir, "a.out")
 	cmd := exec.Command("go", "build", "-o", exe, in)
 
 	// cmd.Env = []string{"GOOS=nacl", "GOARCH=amd64p32", "GOPATH=" + os.Getenv("GOPATH")}
-	cmd.Env = []string{"GOPATH=" + os.Getenv("GOPATH")}
-	cmd.Env = append(cmd.Env, "GOCACHE=/tmp/cache")
+	cmd.Env = []string{
+		"GOOS=nacl", "GOARCH=amd64p32",
+		"GOPATH=" + os.Getenv("GOPATH"),
+		"PATH=" + os.Getenv("PATH"),
+		"GOCACHE=/tmp/cache",
+	}
 	cmd.Dir = tmpDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
@@ -359,8 +377,8 @@ func compileAndRun(req *request) (*response, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), maxRunTime)
 	defer cancel()
-	// cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
-	cmd = exec.CommandContext(ctx, exe, testParam)
+	cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
+	// cmd = exec.CommandContext(ctx, exe, testParam)
 	rec := new(Recorder)
 	cmd.Stdout = rec.Stdout()
 	cmd.Stderr = rec.Stderr()
