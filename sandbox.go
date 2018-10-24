@@ -56,6 +56,8 @@ type request struct {
 type response struct {
 	Errors      string
 	Events      []Event
+	Gomod       []byte
+	Gosum       []byte
 	Status      int
 	IsTest      bool
 	TestsFailed int
@@ -301,7 +303,12 @@ func compileAndRun(req *request) (*response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating temp directory: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	if !*debug {
+		defer os.RemoveAll(tmpDir)
+	}
+	if *verbose {
+		stdlog.Printf("sandbox: %s", tmpDir)
+	}
 
 	src := []byte(req.Body)
 	in := filepath.Join(tmpDir, "main.go")
@@ -340,23 +347,22 @@ func compileAndRun(req *request) (*response, error) {
 		return nil, fmt.Errorf("gomod file can't be created: %v", err)
 	}
 
-	// {
-	// 	cmd := exec.Command("go", "env")
-	// 	cmd.Dir = tmpDir
-	// 	out, _ := cmd.CombinedOutput()
-
-	// 	log.Printf("%s", out)
-	// }
-
 	exe := filepath.Join(tmpDir, "a.out")
 	cmd := exec.Command("go", "build", "-o", exe, in)
-
-	// cmd.Env = []string{"GOOS=nacl", "GOARCH=amd64p32", "GOPATH=" + os.Getenv("GOPATH")}
-	cmd.Env = []string{
-		"GOOS=nacl", "GOARCH=amd64p32",
-		"GOPATH=" + os.Getenv("GOPATH"),
-		"PATH=" + os.Getenv("PATH"),
-		"GOCACHE=/tmp/cache",
+	if *unbox {
+		cmd.Env = []string{
+			"GOPATH=" + os.Getenv("GOPATH"),
+			"PATH=" + os.Getenv("PATH"),
+			"GOCACHE=/tmp/cache",
+		}
+	} else {
+		// cmd.Env = []string{"GOOS=nacl", "GOARCH=amd64p32", "GOPATH=" + os.Getenv("GOPATH")}
+		cmd.Env = []string{
+			"GOOS=nacl", "GOARCH=amd64p32",
+			"GOPATH=" + os.Getenv("GOPATH"),
+			"PATH=" + os.Getenv("PATH"),
+			"GOCACHE=/tmp/cache",
+		}
 	}
 	cmd.Dir = tmpDir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -375,10 +381,25 @@ func compileAndRun(req *request) (*response, error) {
 		}
 		return nil, fmt.Errorf("error building go source: %v", err)
 	}
+	modfile := tmpDir + "/go.mod"
+	file, err := os.Open(modfile)
+	if err != nil {
+		return nil, fmt.Errorf("can open go.mod file: %v", err)
+	}
+
+	modcontent, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("can read go.mod file: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), maxRunTime)
 	defer cancel()
-	cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
-	// cmd = exec.CommandContext(ctx, exe, testParam)
+
+	if *unbox {
+		cmd = exec.CommandContext(ctx, exe, testParam)
+	} else {
+		cmd = exec.CommandContext(ctx, "sel_ldr_x86_64", "-l", "/dev/null", "-S", "-e", exe, testParam)
+	}
 	rec := new(Recorder)
 	cmd.Stdout = rec.Stdout()
 	cmd.Stderr = rec.Stderr()
@@ -411,7 +432,7 @@ func compileAndRun(req *request) (*response, error) {
 			fails += strings.Count(e.Message, failedTestPattern)
 		}
 	}
-	return &response{Events: events, Status: status, IsTest: testParam != "", TestsFailed: fails}, nil
+	return &response{Events: events, Status: status, IsTest: testParam != "", TestsFailed: fails, Gomod: modcontent}, nil
 }
 
 func gomodScan(header http.Header) (bool, error) {

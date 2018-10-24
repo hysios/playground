@@ -10,3 +10,7 @@ docker: Dockerfile
 test: docker
 	go test
 	docker run --rm playground test
+
+run: Dockerfile
+	docker run --name=play --rm -d -p 8090:8080 -v $(shell pwd)/tmp:/tmp playground
+

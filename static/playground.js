@@ -115,8 +115,10 @@ function HTTPTransport(enableVet) {
 			seq++;
 			var cur = seq;
 			var playing;
+      var gomod = options.gomod;
+      var modcontent = gomod.val();
       var headers = {
-        'X-GOMOD': encodeURIComponent(options['gomod'])
+        'X-GOMOD': encodeURIComponent(modcontent)
       }
 
 			$.ajax('/compile', {
@@ -137,6 +139,10 @@ function HTTPTransport(enableVet) {
 						}
 						return;
 					}
+
+          if (data.Gomod) {
+            gomod.val(atob(data.Gomod))
+          }
 
 					if (!enableVet) {
 						playing = playback(output, data);
@@ -313,6 +319,7 @@ function PlaygroundOutput(el) {
     var code = $(opts.codeEl);
     var transport = opts['transport'] || new HTTPTransport(opts['enableVet']);
     var running;
+    var gomod = $(opts.gomodEl);
 
     // autoindent helpers.
     function insertTabs(n) {
@@ -438,7 +445,7 @@ function PlaygroundOutput(el) {
     function run() {
       loading();
       var options = {
-        gomod: $("#gomod").val()
+        gomod: gomod
       }
       running = transport.Run(body(), highlightOutput(PlaygroundOutput(output[0])), options);
     }

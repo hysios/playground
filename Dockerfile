@@ -207,4 +207,4 @@ WORKDIR /app
 # RUN /app/playground test
 
 EXPOSE 8080
-ENTRYPOINT ["/app/playground"]
+ENTRYPOINT ["/app/playground", "-verbose"]

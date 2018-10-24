@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,7 +15,12 @@ import (
 	"cloud.google.com/go/datastore"
 )
 
-var log = newStdLogger()
+var (
+	log     = newStdLogger()
+	verbose = flag.Bool("verbose", true, "display sandbox log")
+	unbox   = flag.Bool("unbox", true, "run playground code without sandbox")
+	debug   = flag.Bool("debug", true, "running in debug mode")
+)
 
 func main() {
 	s, err := newServer(func(s *server) error {
